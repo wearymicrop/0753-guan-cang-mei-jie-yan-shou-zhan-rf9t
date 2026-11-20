@@ -14,7 +14,7 @@
 | M4 字节验签 | 查看观测时点、字节与摘要 | `GET /api/fixity/{sample}` | `app/modules/m4_fixity/service.py` | `tests/test_fixity.py` |
 | M5 副本漂移 | 比较两层副本与固化值 | `GET /api/drift/{sample}` | `app/modules/m5_drift/classify.py` | `tests/test_drift.py` |
 | M6 迁移勾稽 | 复核原件集合及状态计数 | `GET /api/reconcile/{sample}` | `app/modules/m6_reconcile/totals.py` | `tests/test_reconcile.py` |
-| M7 复核封存 | 复算、签署、下载快照 | `POST /api/runs` | `app/modules/m7_archive/service.py` | `tests/test_archive.py` |
+| M7 复核封存 | 复算、签署、下载快照；补件重算出新版本 | `POST /api/runs`、`POST /api/runs/{id}/supplements` | `app/modules/m7_archive/service.py`、`app/modules/m7_archive/revision.py` | `tests/test_archive.py`、`tests/test_supplement.py` |
 
 ## 陷阱登记
 
@@ -33,3 +33,6 @@
 | TRAP-23 | 版本恰好交接 | 同时激活两版 | 使用半开区间 | `app/modules/m1_batches/service.py` | `tests/test_batches.py::test_half_open_boundary_selects_new_release` |
 | TRAP-25 | 两版有效期重叠 | 按文件次序选版本 | 拒绝选择并报告两版 | `app/modules/m1_batches/service.py` | `tests/test_batches.py::test_catalog_overlap_has_no_winner` |
 | TRAP-26 | 提交旧摘要 | 签署错误证据 | 返回冲突 | `app/modules/m7_archive/service.py` | `tests/test_archive.py::test_signature_requires_current_digest` |
+| TRAP-27 | 同一补件重复提交 | 正式版本膨胀 | 内容寻址复用原版本 | `app/modules/m7_archive/service.py` | `tests/test_supplement.py::test_same_supplement_does_not_add_version` |
+| TRAP-28 | 补测晚于原验收截止 | 被未来观测过滤 | 补件可推进截止且不许倒退 | `app/modules/m7_archive/revision.py` | `tests/test_supplement.py::test_late_observation_needs_same_day_cutoff_extension` |
+| TRAP-29 | 未对平版本被签署 | 结论与证据不符 | 拒签并保留待复核状态 | `app/modules/m7_archive/service.py` | `tests/test_supplement.py::test_only_balanced_revision_can_be_signed` |

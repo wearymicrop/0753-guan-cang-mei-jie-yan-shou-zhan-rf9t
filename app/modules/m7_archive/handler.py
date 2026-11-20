@@ -27,6 +27,11 @@ def rerun(ident: str, request: Request):
     return service.rerun(request.app.state.ledger, ident)
 
 
+@router.post("/{ident}/supplements")
+def supplement(ident: str, body: dict, request: Request):
+    return service.supplement(request.app.state.ledger, ident, body)
+
+
 @router.post("/{ident}/sign")
 def sign(ident: str, body: dict, request: Request):
     return service.sign(request.app.state.ledger, ident, body)

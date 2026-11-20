@@ -1,4 +1,4 @@
-import {badge, compare, grid, list, matrix, safe, tiers} from './cells.js';
+import {badge, compare, grid, list, matrix, revision, safe, tiers} from './cells.js';
 
 const $ = selector => document.querySelector(selector);
 const modules = {batches:'馆藏批次',manifest:'固化清单',mapping:'路由映射',fixity:'字节验签',drift:'副本漂移',reconcile:'迁移勾稽',archive:'复核封存'};
@@ -28,12 +28,13 @@ function inspect(row) {
 function paint() {
   const {result,section} = data;
   const summary = result.reconcile.totals;
-  const rows = result.drift.rows.filter(row=>data.filter==='all'||row.state===data.filter);
+  const shifted = new Set((data.run?.delta?.changes ?? []).map(change=>change.object_id));
+  const rows = result.drift.rows.filter(row=>data.filter==='all'||(data.filter==='changed'?shifted.has(row.object_id):row.state===data.filter));
   const current = rows.find(row=>row.object_id===data.object) ?? rows[0];
   data.object=current?.object_id;
   $('#metrics').innerHTML=[['原件',summary.originals,''],['两副本齐全',summary.verified,'verified'],['待补',summary.pending,'pending'],['冲突',summary.conflict,'conflict'],['已验副本',summary.verified_copies,'']].map(([label,value,className])=>`<div class="metric ${className}"><span>${label}</span><strong>${value}</strong></div>`).join('');
   $('#batch-name').textContent=result.batch; $('#policy').textContent=result.batches.selected ?? '无唯一规则';
-  $('#matrix').innerHTML=matrix(rows,data.object); $('#matrix-count').textContent=`${rows.length} / ${summary.originals} 件原件`;
+  $('#matrix').innerHTML=matrix(rows,data.object,shifted); $('#matrix-count').textContent=`${rows.length} / ${summary.originals} 件原件`;
   $('#section-title').textContent=modules[section]; $('#inspector').innerHTML=inspect(current);
   const exceptions = section==='archive' || section==='drift' ? result.reconcile.issues : result[section].issues;
   const related = issue => current && (issue.object_id===current.object_id ||
@@ -49,9 +50,13 @@ function paint() {
 function vault() {
   const run = data.run;
   if (!run) return '<p class="empty">运行验收后生成封存凭证。</p><button data-history>查询历史</button><div id="history"></div>';
-  return `<div class="stamp"><strong>${safe(run.manifest.batch)}</strong><code>${safe(run.manifest.digest)}</code>${list([['生成时间',run.manifest.generated_at],['原件归类',run.result.reconcile.status==='MATCHED'?'已对平':'待复核']])}</div>
-  <div class="review-actions"><button data-replay>复算快照</button><a class="file-link" href="/api/runs/${safe(run.id)}/export">下载封存证据</a><button data-history>查询历史</button></div>
-  ${run.signature ? `<p>已封存 · ${safe(run.signature.reviewer)}</p>` : '<form class="receipt-entry" id="sign"><label>复核人 <input name="reviewer" maxlength="100" required></label><button>签署封存</button></form>'}<div id="history"></div>`;
+  const balanced = run.result.reconcile.status==='MATCHED';
+  const delta = run.delta;
+  const lines = rows => rows.length ? (rows.length>6 ? `${rows[0]}–${rows.at(-1)} 共${rows.length}行` : rows.join('、')) : '—';
+  return `<div class="stamp"><strong>${safe(run.manifest.batch)} · 第${run.manifest.revision ?? 1}版</strong><code>${safe(run.manifest.digest)}</code>${list([['生成时间',run.manifest.generated_at],['原件归类',balanced?'已对平':'待复核'],['前版',run.manifest.parent ?? '无']])}</div>
+  <div class="review-actions"><button data-replay>复算快照</button><a class="file-link" href="/api/runs/${safe(run.id)}/export">下载封存证据</a><button data-supplement>导入补件重算</button><input type="file" id="supplement-file" accept=".json,application/json" hidden><button data-history>查询历史</button>${run.manifest.parent?`<button data-run="${safe(run.manifest.parent)}">查看前版</button>`:''}</div>
+  ${delta?`<div class="stamp"><strong>相较前版 · ${delta.reconcile.before.status==='MATCHED'?'已对平':'待复核'} → ${delta.reconcile.after.status==='MATCHED'?'已对平':'待复核'}</strong>${list([['新增馆件',delta.summary.added],['状态变化',delta.summary.changed],['移除',delta.summary.removed],['未变',delta.summary.unchanged],['补件数据行',lines(delta.supplement.objects)],['补测数据行',lines(delta.supplement.replicas)]])}</div>${revision(delta)}`:''}
+  ${run.signature ? `<p>已封存 · ${safe(run.signature.reviewer)}</p>` : balanced ? '<form class="receipt-entry" id="sign"><label>复核人 <input name="reviewer" maxlength="100" required></label><button>签署封存</button></form>' : '<p class="empty">归类未对平，当前版本不可签署。</p>'}<div id="history"></div>`;
 }
 async function request(path, payload) {
   const response = await fetch(path,payload===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -77,12 +82,22 @@ $('#source-file').addEventListener('change',event=>{const [file]=event.target.fi
   useRun(await request('/api/runs',{source}));notice('清单验收已归档');
 }).finally(()=>{event.target.value='';});});
 $('#inspector').addEventListener('click',event=>{
-  const button=event.target.closest('[data-replay],[data-history],[data-run]');if(!button)return;
+  const button=event.target.closest('[data-replay],[data-history],[data-run],[data-supplement]');if(!button)return;
+  if(button.hasAttribute('data-supplement')){$('#supplement-file').click();return;}
   work(async()=>{
     if(button.hasAttribute('data-replay')){useRun(await request(`/api/runs/${data.run.id}/rerun`,{}));notice('复算一致');}
-    if(button.hasAttribute('data-history')){const {runs}=await request('/api/runs');$('#history').replaceChildren(...runs.map(run=>{const item=document.createElement('button');item.dataset.run=run.id;item.textContent=run.batch;return item;}));notice(runs.length?`${runs.length} 笔封存记录`:'暂无封存记录');}
+    if(button.hasAttribute('data-history')){const {runs}=await request('/api/runs');$('#history').replaceChildren(...runs.map(run=>{const item=document.createElement('button');item.dataset.run=run.id;item.textContent=run.batch+(run.revision>1?` · 第${run.revision}版`:'');return item;}));notice(runs.length?`${runs.length} 笔封存记录`:'暂无封存记录');}
     if(button.dataset.run){useRun(await request(`/api/runs/${button.dataset.run}`));notice('已载入封存记录');}
   });
+});
+$('#inspector').addEventListener('change',event=>{
+  if(event.target.id!=='supplement-file')return;
+  const [file]=event.target.files;if(!file)return;
+  work(async()=>{
+    let addition;try{addition=JSON.parse(await file.text());}catch{throw new Error('补件格式错误，选择 JSON 文件。');}
+    const run=await request(`/api/runs/${data.run.id}/supplements`,addition);
+    useRun(run);notice(run.reused?'同一补件未新增版本':`补件已重算为第${run.manifest.revision}版`);
+  }).finally(()=>{event.target.value='';});
 });
 $('#inspector').addEventListener('submit',event=>{if(event.target.id!=='sign')return;event.preventDefault();work(async()=>{
   data.run.signature=await request(`/api/runs/${data.run.id}/sign`,{reviewer:new FormData(event.target).get('reviewer'),digest:data.run.manifest.digest});
